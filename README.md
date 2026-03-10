@@ -154,6 +154,26 @@ idp-smart/
      curl http://localhost:8000/api/v1/status/TU_ID_DE_TAREA
      ```
 
+## ⚙️ Configuración del Modelo de IA (LLM)
+
+El sistema es híbrido y permite alternar entre el uso de la API de Google (Gemini) o modelos locales (Ollama/Qwen). La configuración se realiza en el archivo `./app/core/config.py` o mediante variables de entorno en el `docker-compose.yml`.
+
+### Opción A: Google Gemini (Nube - Predeterminado)
+Es la opción más rápida de configurar. Requiere una API Key de Google AI Studio.
+*   `LLM_PROVIDER=google`
+*   `GOOGLE_API_KEY=tu_api_key_aquí`
+
+### Opción B: Ollama + Qwen 2.5 (Local - Recomendado para privacidad)
+Ideal para procesar documentos sensibles sin que salgan de tu red.
+1.  Instala [Ollama](https://ollama.com/) en tu equipo host (Windows/Linux).
+2.  Descarga el modelo: `ollama run qwen2.5:7b` (o la versión `qwen2.5:3b` si tienes poca VRAM).
+3.  Configura el proyecto:
+    *   `LLM_PROVIDER=ollama`
+    *   `OLLAMA_BASE_URL=http://host.docker.internal:11434`
+    *   `OLLAMA_MODEL=qwen2.5:7b`
+
+---
+
 ## ⚙️ Configuraciones de Entorno (`host.docker.internal`)
 
 El archivo `docker-compose.yml` configura explícitamente el puente de red al host:

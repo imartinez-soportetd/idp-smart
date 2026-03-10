@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     minio_secret_key: str = "minio_password123"
     minio_bucket: str = "idp-documents"
     minio_secure: bool = False
+
+    # LLM Settings
+    llm_provider: str = "google" # "google" o "ollama"
+    google_api_key: str = "AIzaSyAnilUrCDdCD-kP0doz5fgpFHNsJ45sigw"
+    ollama_base_url: str = "http://host.docker.internal:11434"
+    ollama_model: str = "qwen2.5:7b" 
     
     @property
     def database_url(self) -> str:

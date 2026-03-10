@@ -1,22 +1,33 @@
-import json
-from langchain.prompts import PromptTemplate
-from langchain.chat_models import init_chat_model
-
 import os
 import re
 import json
+from core.config import settings
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_ollama import ChatOllama
 from langchain.prompts import PromptTemplate
 
 def get_llm():
+    """
+    Instancia el LLM configurado en Settings.
+    Soporta Google (Gemini) y Ollama (Local).
+    """
     try:
-        os.environ["GOOGLE_API_KEY"] = "AIzaSyAnilUrCDdCD-kP0doz5fgpFHNsJ45sigw"
-        return ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            temperature=0
-        )
+        if settings.llm_provider == "ollama":
+            print(f"Conectando a LLM Local (Ollama) en {settings.ollama_base_url} con modelo {settings.ollama_model}...")
+            return ChatOllama(
+                base_url=settings.ollama_base_url,
+                model=settings.ollama_model,
+                temperature=0
+            )
+        else:
+            # Por defecto usar Google Gemini
+            os.environ["GOOGLE_API_KEY"] = settings.google_api_key
+            return ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash",
+                temperature=0
+            )
     except Exception as e:
-        print(f"Error cargando el LLM Gemini: {e}")
+        print(f"Error cargando el LLM ({settings.llm_provider}): {e}")
         return None
 
 def extract_form_data(markdown_text: str, json_form_schema: dict) -> dict:
