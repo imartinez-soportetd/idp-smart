@@ -1,19 +1,46 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, JSON, func
+from sqlalchemy import Column, Integer, String, Text, DateTime, JSON, Float, func
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
 
+
 class DocumentExtraction(Base):
+    """
+    Tabla principal de extracción de documentos.
+    Almacena el JSON completo del sistema Java (extracted_data),
+    un JSON simplificado solo con label/value (simplified_json),
+    y la ruta al markdown generado por Docling (markdown_minio_path).
+    """
     __tablename__ = "document_extractions"
     __table_args__ = {"schema": "idp_smart"}
-    
-    id = Column(Integer, primary_key=True, index=True)
-    task_id = Column(String(255), unique=True, index=True, nullable=False)
-    act_type = Column(String(255), nullable=True) # e.g. "Escritura", "Acta"
-    form_code = Column(String(255), nullable=True) # reference to cfdeffrmpre id
-    pdf_minio_path = Column(String(1024), nullable=True) # path where doc lives in MinIO
-    extracted_data = Column(JSON, nullable=True) # the final JSON mapped data
-    status = Column(String(50), default="PROCESSING")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+    id                  = Column(Integer, primary_key=True, index=True)
+    task_id             = Column(String(255), unique=True, index=True, nullable=False)
+    act_type            = Column(String(255), nullable=True)   # dsactocorta, ej: BI34
+    form_code           = Column(String(255), nullable=True)   # lldeffrmpre de cfdeffrmpre
+    pdf_minio_path      = Column(String(1024), nullable=True)  # ruta del documento en MinIO
+    markdown_minio_path = Column(String(1024), nullable=True)  # ruta del markdown generado por Docling
+    stage_current       = Column(String(100), nullable=True)   # etapa activa en el worker
+    status              = Column(String(50), default="PENDING_CELERY")
+    extracted_data      = Column(JSON, nullable=True)  # JSON completo con todos los UUID y campos del sistema Java
+    simplified_json     = Column(JSON, nullable=True)  # JSON reducido { "label": "value", ... } para validación rápida
+    created_at          = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at          = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class ProcessLog(Base):
+    """
+    Tabla de log de ejecuciones del motor idp-smart.
+    Registra cada evento relevante de la extracción (inicio, etapas, errores, duración).
+    """
+    __tablename__ = "process_logs"
+    __table_args__ = {"schema": "idp_smart"}
+
+    id           = Column(Integer, primary_key=True, index=True)
+    task_id      = Column(String(255), index=True, nullable=False)  # Referencia a document_extractions
+    stage        = Column(String(100), nullable=False)              # Etapa: VISION | SCHEMA_LOAD | AGENT | MAPPER | DB_SAVE | ERROR
+    level        = Column(String(20), default="INFO")               # INFO | WARNING | ERROR | DEBUG
+    message      = Column(Text, nullable=False)                     # Mensaje descriptivo del evento
+    detail       = Column(JSON, nullable=True)                      # Datos adicionales (métricas, errores, payloads cortos)
+    duration_ms  = Column(Float, nullable=True)                     # Duración de la etapa en milisegundos
+    created_at   = Column(DateTime(timezone=True), server_default=func.now())
