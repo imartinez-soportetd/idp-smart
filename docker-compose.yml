@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  valkey:
+    image: valkey/valkey:7.2
+    container_name: idp_valkey
+    ports:
+      - "6379:6379"
+    restart: always
+
+  minio:
+    image: minio/minio:latest
+    container_name: idp_minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=minio_password123
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    restart: always
+
+  api:
+    build: .
+    container_name: idp_api
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./app:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - DB_HOST=host.docker.internal
+      - DB_PORT=5432
+      - DB_USER=admin_user
+      - DB_PASSWORD=Ad54=Tx91.Vm+23_Qr78
+      - DB_NAME=rpp_qa
+      - VALKEY_URL=redis://valkey:6379/0
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=minio_password123
+      - MINIO_BUCKET=idp-documents
+    depends_on:
+      - valkey
+      - minio
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  worker:
+    build: .
+    container_name: idp_worker
+    command: celery -A worker.celery_app worker --loglevel=info -c 4
+    volumes:
+      - ./app:/app
+    environment:
+      - DB_HOST=host.docker.internal
+      - DB_PORT=5432
+      - DB_USER=admin_user
+      - DB_PASSWORD=Ad54=Tx91.Vm+23_Qr78
+      - DB_NAME=rpp_qa
+      - VALKEY_URL=redis://valkey:6379/0
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=minio_password123
+      - MINIO_BUCKET=idp-documents
+    depends_on:
+      - valkey
+      - minio
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  minio_data:
+

@@ -1,0 +1,14 @@
+fastapi==0.103.2
+uvicorn==0.23.2
+celery==5.3.4
+redis==5.0.1
+pydantic==2.4.2
+pydantic-settings==2.0.3
+langchain==0.0.350
+docling==1.0.0
+asyncpg==0.28.0
+sqlalchemy==2.0.21
+python-dotenv==1.0.0
+aiofiles==23.2.1
+python-multipart==0.0.6
+minio==7.2.4
