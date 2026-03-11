@@ -62,52 +62,79 @@ def _set_stage(task_id: str, stage: str, status: str = None):
 
 
 @celery_app.task(name="process_doc")
-def process_doc(task_id: str, json_minio_object: str, pdf_minio_object: str):
+def process_doc(task_id: str, json_minio_object: str, pdf_minio_object: str, skip_vision: bool = False):
     """
     Pipeline de extracción semántica de documentos:
     INICIO → VISION → SCHEMA_LOAD → AGENT → MAPPER → SIMPLIFY → DB_SAVE
+    
+    Si skip_vision=True o ya existe un markdown_minio_path, se salta la etapa VISION.
     """
     minio_client = get_minio_client()
+    doc_markdown = None
 
     try:
         # ── INICIO ───────────────────────────────────────────────────────────────
-        _set_stage(task_id, "INICIO")
+        with db_engine.begin() as conn:
+            conn.execute(
+                text("UPDATE idp_smart.document_extractions SET started_at = NOW(), stage_current = 'INICIO' WHERE task_id = :tid"),
+                {"tid": task_id}
+            )
+        
         log_event(db_engine, task_id, "INICIO",
                   f"Tarea iniciada — doc: {pdf_minio_object} | form: {json_minio_object}",
-                  detail={"pdf": pdf_minio_object, "form": json_minio_object})
+                  detail={"pdf": pdf_minio_object, "form": json_minio_object, "skip_vision": skip_vision})
+
+        # Verificar si ya tenemos el markdown en la base de datos para retomar
+        with db_engine.connect() as conn:
+            result = conn.execute(
+                text("SELECT markdown_minio_path FROM idp_smart.document_extractions WHERE task_id = :tid"),
+                {"tid": task_id}
+            ).fetchone()
+            if result and result[0]:
+                log_event(db_engine, task_id, "INICIO", "Markdown encontrado en BD, se intentará retomar.")
+                # Intentamos descargar el markdown de MinIO
+                try:
+                    obj_path = result[0].split("idp-documents/")[-1]
+                    res_md = minio_client.get_object("idp-documents", obj_path)
+                    doc_markdown = res_md.read().decode("utf-8")
+                    skip_vision = True
+                    log_event(db_engine, task_id, "INICIO", "Markdown recuperado exitosamente de MinIO.")
+                except Exception as e_md:
+                    log_event(db_engine, task_id, "INICIO", f"No se pudo recuperar markdown existente: {e_md}. Re-procesando VISION.", level="WARNING")
 
         # ── VISION ───────────────────────────────────────────────────────────────
-        _set_stage(task_id, "VISION")
-        doc_markdown = None
-        with timed_stage(db_engine, task_id, "VISION", "Extracción Markdown con Granite-Docling"):
-            doc_markdown = extract_markdown_from_minio(pdf_minio_object)  # Fix argument count
-            if not doc_markdown:
-                doc_markdown = "# Documento Fallback\nNo se pudo extraer contenido jerárquico."
-                log_event(db_engine, task_id, "VISION",
-                          "Docling no extrajo contenido, usando fallback de texto vacío.", level="WARNING")
-            else:
-                log_event(db_engine, task_id, "VISION",
-                          f"Markdown generado: {len(doc_markdown)} caracteres extraídos.",
-                          detail={"char_count": len(doc_markdown)})
+        if not skip_vision:
+            _set_stage(task_id, "VISION")
+            with timed_stage(db_engine, task_id, "VISION", "Extracción Markdown con Granite-Docling"):
+                doc_markdown = extract_markdown_from_minio(pdf_minio_object)
+                if not doc_markdown:
+                    doc_markdown = "# Documento Fallback\nNo se pudo extraer contenido jerárquico."
+                    log_event(db_engine, task_id, "VISION",
+                              "Docling no extrajo contenido, usando fallback de texto vacío.", level="WARNING")
+                else:
+                    log_event(db_engine, task_id, "VISION",
+                              f"Markdown generado: {len(doc_markdown)} caracteres extraídos.",
+                              detail={"char_count": len(doc_markdown)})
 
-        # Guardar el Markdown en MinIO para auditoría / re-procesamiento
-        markdown_path = None
-        try:
-            md_bytes = doc_markdown.encode("utf-8")
-            md_object_name = f"{task_id}/extracted_markdown.md"
-            markdown_path = upload_file_to_minio(minio_client, md_object_name, md_bytes, "text/markdown")
-            log_event(db_engine, task_id, "VISION",
-                      f"Markdown persistido en MinIO: {markdown_path}",
-                      detail={"minio_path": markdown_path})
-            # Guardar la ruta del markdown en la BD
-            with db_engine.begin() as conn:
-                conn.execute(
-                    text("UPDATE idp_smart.document_extractions SET markdown_minio_path = :path WHERE task_id = :tid"),
-                    {"path": markdown_path, "tid": task_id},
-                )
-        except Exception as exc:
-            log_event(db_engine, task_id, "VISION",
-                      f"No se pudo guardar el markdown en MinIO: {exc}", level="WARNING")
+            # Guardar el Markdown en MinIO para auditoría / re-procesamiento
+            try:
+                md_bytes = doc_markdown.encode("utf-8")
+                md_object_name = f"{task_id}/extracted_markdown.md"
+                markdown_path = upload_file_to_minio(minio_client, md_object_name, md_bytes, "text/markdown")
+                log_event(db_engine, task_id, "VISION",
+                          f"Markdown persistido en MinIO: {markdown_path}",
+                          detail={"minio_path": markdown_path})
+                # Guardar la ruta del markdown en la BD
+                with db_engine.begin() as conn:
+                    conn.execute(
+                        text("UPDATE idp_smart.document_extractions SET markdown_minio_path = :path WHERE task_id = :tid"),
+                        {"path": markdown_path, "tid": task_id},
+                    )
+            except Exception as exc:
+                log_event(db_engine, task_id, "VISION",
+                          f"No se pudo guardar el markdown en MinIO: {exc}", level="WARNING")
+        else:
+            log_event(db_engine, task_id, "VISION", "Saltando etapa VISION (Markdown ya disponible o solicitado saltar).")
 
         # ── SCHEMA_LOAD ──────────────────────────────────────────────────────────
         _set_stage(task_id, "SCHEMA_LOAD")
@@ -160,6 +187,7 @@ def process_doc(task_id: str, json_minio_object: str, pdf_minio_object: str):
                             stage_current       = 'COMPLETADO',
                             extracted_data      = :full_json,
                             simplified_json     = :simplified_json,
+                            total_duration_s    = EXTRACT(EPOCH FROM (NOW() - started_at)),
                             updated_at          = NOW()
                         WHERE task_id = :task_id
                     """),
@@ -180,11 +208,6 @@ def process_doc(task_id: str, json_minio_object: str, pdf_minio_object: str):
         error_msg = f"Error general en task_id {task_id}: {str(e)}"
         print(error_msg)
         traceback.print_exc()
-        
-        # Registrar el error como un log de evento general
         log_event(db_engine, task_id, "ERROR", error_msg, level="ERROR", detail={"traceback": traceback.format_exc()})
-        
-        # Setear explícitamente el STATUS como ERROR y la etapa actual.
         _set_stage(task_id, "ERROR", status="ERROR")
-        
         return {"task_id": task_id, "status": "ERROR", "error": str(e)}

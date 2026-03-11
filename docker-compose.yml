@@ -11,8 +11,8 @@ services:
   db:
     image: postgres:18
     container_name: idp_db
-    ports:
-      - "5432:5432"
+    # ports:
+    #   - "5432:5432"
     environment:
       - POSTGRES_USER=admin_user
       - POSTGRES_PASSWORD=Ad54=Tx91.Vm+23_Qr78
@@ -44,21 +44,12 @@ services:
       - ./app:/app
     ports:
       - "8000:8000"
-    environment:
-      - DB_HOST=db
-      - DB_PORT=5432
-      - DB_USER=admin_user
-      - DB_PASSWORD=Ad54=Tx91.Vm+23_Qr78
-      - DB_NAME=rpp_qa
-      - VALKEY_URL=redis://valkey:6379/0
-      - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=admin
-      - MINIO_SECRET_KEY=minio_password123
-      - MINIO_BUCKET=idp-documents
+    env_file:
+      - .env
     depends_on:
       - valkey
       - minio
-      - db
+      # - db
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -68,21 +59,12 @@ services:
     command: celery -A worker.celery_app worker --loglevel=info -c 4
     volumes:
       - ./app:/app
-    environment:
-      - DB_HOST=db
-      - DB_PORT=5432
-      - DB_USER=admin_user
-      - DB_PASSWORD=Ad54=Tx91.Vm+23_Qr78
-      - DB_NAME=rpp_qa
-      - VALKEY_URL=redis://valkey:6379/0
-      - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=admin
-      - MINIO_SECRET_KEY=minio_password123
-      - MINIO_BUCKET=idp-documents
+    env_file:
+      - .env
     depends_on:
       - valkey
       - minio
-      - db
+      # - db
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

@@ -21,9 +21,12 @@ def get_llm():
             )
         else:
             # Por defecto usar Google Gemini
+            if not settings.google_api_key:
+                print("Error: No se ha configurado la GOOGLE_API_KEY.")
+                return None
             os.environ["GOOGLE_API_KEY"] = settings.google_api_key
             return ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash",
+                model="gemini-flash-latest",
                 temperature=0
             )
     except Exception as e:
@@ -37,15 +40,19 @@ def extract_form_data(markdown_text: str, json_form_schema: dict) -> dict:
     También tienes el esquema del formulario dinámico JSON con los campos requeridos.
     
     TU TAREA PRINCIPAL:
-    1. Extraer la información exacta del documento para rellenar los valores (`value`) de cada campo (`uuid`).
-    2. MANEJO DE MATRICES/LISTAS: Si el esquema contiene bloques que representan colecciones (como un grupo de campos para 'Propietarios', 'Colindancias', etc.) y encuentras MÚLTIPLES incidencias en el documento:
-       - Debes devolver una LISTA de objetos para ese bloque.
-       - Cada objeto de la lista debe mantener los UUIDs originales pero con los valores específicos de esa incidencia.
+    1. ANALIZAR PROFUNDAMENTE: El esquema JSON puede tener múltiples niveles de anidación (contenedores dentro de contenedores). Debes recorrer TODA la estructura, no solo el primer nivel.
+    2. EXTRAER VALORES: Busca en el documento la información que corresponda a cada `uuid` del esquema y colócalo en el campo `value`.
+    3. MANEJO DE MATRICES/LISTAS (CRÍTICO): Si encuentras una sección que es "Repetible" (ej: 'Propietarios', 'Antecedentes', 'Colindancias') y el documento menciona VARIAS de estas entidades:
+       - El valor asociado al UUID del contenedor padre debe ser una LISTA de objetos.
+       - Cada objeto en esa lista debe tener la estructura interna definida en el esquema (sus propios UUIDs) con los datos de esa instancia específica.
+       - NO te limites a la primera coincidencia; extrae todas las que aparezcan en el documento.
     
-    FORMA DE ENTREGA:
-    Devuelve estrictamente un JSON puro donde las llaves sean los UUIDs y los valores sean los datos extraídos.
-    Si un campo es parte de una lista repetible, el valor asociado al UUID del 'contenedor' o 'sección' debe ser la lista de objetos extraídos.
-    Si un campo no se menciona en el documento, ponlo en nulo o cadena vacía.
+    REGLAS DE FORMATO:
+    - Retorna ÚNICAMENTE un JSON válido.
+    - Las llaves deben ser los UUIDs.
+    - Si un UUID corresponde a un contenedor con múltiples instancias, el valor es una lista `[]`.
+    - Si un campo no existe en el documento, usa `null` o `""`.
+    - Mantén la fidelidad de los datos (nombres exactos, fechas, montos).
     
     DOCUMENTO MARKDOWN:
     {document_md}

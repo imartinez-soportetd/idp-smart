@@ -1,25 +1,27 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
     db_host: str = "localhost"
     db_port: int = 5432
-    db_user: str = "admin_user"
-    db_password: str = "Ad54=Tx91.Vm+23_Qr78"
-    db_name: str = "rpp_qa"
+    db_user: str = "postgres"
+    db_password: str = ""
+    db_name: str = "postgres"
     valkey_url: str = "redis://localhost:6379/0" 
     
     # Minio Configuration
     minio_endpoint: str = "localhost:9000"
-    minio_access_key: str = "admin"
-    minio_secret_key: str = "minio_password123"
+    minio_access_key: str = "minio_user"
+    minio_secret_key: str = "minio_password"
     minio_bucket: str = "idp-documents"
     minio_secure: bool = False
 
     # LLM Settings
     llm_provider: str = "google" # "google" o "ollama"
-    google_api_key: str = "AIzaSyAnilUrCDdCD-kP0doz5fgpFHNsJ45sigw"
-    ollama_base_url: str = "http://host.docker.internal:11434"
+    google_api_key: str = ""
+    ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "qwen2.5:7b" 
     
     @property

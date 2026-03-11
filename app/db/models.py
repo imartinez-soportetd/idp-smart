@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, JSON, Float, func
+from sqlalchemy import Column, Integer, String, Text, DateTime, Float, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -19,11 +20,14 @@ class DocumentExtraction(Base):
     act_type            = Column(String(255), nullable=True)   # dsactocorta, ej: BI34
     form_code           = Column(String(255), nullable=True)   # lldeffrmpre de cfdeffrmpre
     pdf_minio_path      = Column(String(1024), nullable=True)  # ruta del documento en MinIO
+    json_minio_path     = Column(String(1024), nullable=True)  # ruta del esquema JSON en MinIO
     markdown_minio_path = Column(String(1024), nullable=True)  # ruta del markdown generado por Docling
     stage_current       = Column(String(100), nullable=True)   # etapa activa en el worker
     status              = Column(String(50), default="PENDING_CELERY")
-    extracted_data      = Column(JSON, nullable=True)  # JSON completo con todos los UUID y campos del sistema Java
-    simplified_json     = Column(JSON, nullable=True)  # JSON reducido { "label": "value", ... } para validación rápida
+    extracted_data      = Column(JSONB, nullable=True)  # JSON completo con todos los UUID y campos del sistema Java
+    simplified_json     = Column(JSONB, nullable=True)  # JSON reducido { "label": "value", ... } para validación rápida
+    started_at          = Column(DateTime(timezone=True), nullable=True) # Fecha real de inicio en el worker
+    total_duration_s    = Column(Float, nullable=True) # Duración total en segundos
     created_at          = Column(DateTime(timezone=True), server_default=func.now())
     updated_at          = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -41,6 +45,6 @@ class ProcessLog(Base):
     stage        = Column(String(100), nullable=False)              # Etapa: VISION | SCHEMA_LOAD | AGENT | MAPPER | DB_SAVE | ERROR
     level        = Column(String(20), default="INFO")               # INFO | WARNING | ERROR | DEBUG
     message      = Column(Text, nullable=False)                     # Mensaje descriptivo del evento
-    detail       = Column(JSON, nullable=True)                      # Datos adicionales (métricas, errores, payloads cortos)
+    detail       = Column(JSONB, nullable=True)                      # Datos adicionales (métricas, errores, payloads cortos)
     duration_ms  = Column(Float, nullable=True)                     # Duración de la etapa en milisegundos
     created_at   = Column(DateTime(timezone=True), server_default=func.now())

@@ -20,13 +20,7 @@ app = FastAPI(
 # Funciona sin importar la IP del servidor de desarrollo o producción.
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=(
-        r"http://(localhost|127\.0\.0\.1"          # loopback
-        r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"         # Red clase A privada (10.x.x.x)
-        r"|192\.168\.\d{1,3}\.\d{1,3}"             # Red clase C privada (192.168.x.x)
-        r"|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"  # Red clase B privada (172.16-31.x.x)
-        r")(:\d+)?"                                 # Cualquier puerto opcional
-    ),
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -61,6 +55,7 @@ async def get_pre_coded_forms(db: AsyncSession = Depends(get_db)):
             llacto,
             dsactocorta,
             dsacto,
+            jsconfforma,
             CONCAT(dsactocorta, ' - ', dsacto) AS display_label
         FROM idp_smart.act_forms_catalog
         ORDER BY dsactocorta ASC
@@ -101,7 +96,7 @@ async def process_document(
     
     # Upload json to MinIO for Celery to fetch
     json_object_name = f"{task_id}/{json_form.filename}"
-    upload_file_to_minio(minio_client, json_object_name, json_content, "application/json")
+    json_minio_path = upload_file_to_minio(minio_client, json_object_name, json_content, "application/json")
     
     # Create DB entry for tracking the extraction
     new_extraction = DocumentExtraction(
@@ -109,6 +104,7 @@ async def process_document(
         act_type=act_type,
         form_code=form_code,
         pdf_minio_path=pdf_minio_path,
+        json_minio_path=json_minio_path,
         status="PENDING_CELERY"
     )
     db.add(new_extraction)
@@ -125,7 +121,58 @@ async def process_document(
         "status": "Accepted",
         "task_id": task_id,
         "message": "Document uploaded to MinIO and queued for processing",
-        "minio_path": pdf_minio_path
+        "minio_path": pdf_minio_path,
+        "json_path": json_minio_path
+    }
+
+@app.post("/api/v1/reprocess/{task_id}", tags=["Procesamiento"])
+async def reprocess_document(
+    task_id: str,
+    skip_vision: bool = False,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Reinicia un proceso de extracción para un TaskID existente.
+    Si skip_vision=True, intentará usar el Markdown ya existente en MinIO.
+    """
+    query = text("SELECT * FROM idp_smart.document_extractions WHERE task_id = :task_id")
+    result = await db.execute(query, {"task_id": task_id})
+    row = result.fetchone()
+
+    if not row:
+        return {"error": "Tarea no encontrada."}
+
+    row_dict = dict(row._mapping)
+    
+    # Reset status a PENDING_CELERY para que el worker lo tome.
+    # También reseteamos created_at para que los cronómetros de progreso empiecen de cero.
+    update_query = text("""
+        UPDATE idp_smart.document_extractions 
+        SET status = 'PENDING_CELERY', 
+            stage_current = 'INICIO', 
+            created_at = NOW(),
+            updated_at = NOW() 
+        WHERE task_id = :task_id
+    """)
+    await db.execute(update_query, {"task_id": task_id})
+    await db.commit()
+
+    # Re-enviar a Celery
+    # Extraemos nombres de objeto de las rutas completas
+    # Ejemplo path: idp-documents/TASK_ID/file.pdf -> TASK_ID/file.pdf
+    pdf_obj = row_dict["pdf_minio_path"].split("idp-documents/")[-1]
+    json_obj = row_dict["json_minio_path"].split("idp-documents/")[-1] if row_dict.get("json_minio_path") else f"{task_id}/form.json"
+
+    celery_app.send_task(
+        "process_doc", 
+        args=[task_id, json_obj, pdf_obj, skip_vision], 
+        task_id=task_id
+    )
+
+    return {
+        "status": "Accepted",
+        "task_id": task_id,
+        "message": f"Task re-queued (skip_vision={skip_vision})"
     }
 
 @app.get("/api/v1/status/{task_id}", tags=["Procesamiento"])
@@ -182,6 +229,62 @@ _STAGE_LABELS = {
 }
 
 
+@app.get("/api/v1/extractions", tags=["Procesamiento"])
+async def list_extractions(limit: int = 100, db: AsyncSession = Depends(get_db)):
+    """
+    Lista las extracciones procesadas recientemente.
+    """
+    query = text("""
+        SELECT task_id, status, stage_current, act_type, form_code, pdf_minio_path, created_at, updated_at
+        FROM idp_smart.document_extractions
+        ORDER BY created_at DESC
+        LIMIT :limit
+    """)
+    result = await db.execute(query, {"limit": limit})
+    rows = result.fetchall()
+    
+    extractions = [dict(row._mapping) for row in rows]
+    # Convert datetimes to string for JSON serialization
+    for ext in extractions:
+        ext["created_at"] = str(ext["created_at"])
+        ext["updated_at"] = str(ext["updated_at"])
+        
+    return {"total": len(extractions), "extractions": extractions}
+
+
+@app.delete("/api/v1/extractions/{task_id}", tags=["Procesamiento"])
+async def delete_extraction(task_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Elimina el registro de una extracción, sus logs y sus archivos en MinIO.
+    """
+    # 1. Eliminar archivos en MinIO
+    try:
+        minio_client = get_minio_client()
+        objects_to_delete = minio_client.list_objects(
+            "idp-documents", prefix=f"{task_id}/", recursive=True
+        )
+        for obj in objects_to_delete:
+            minio_client.remove_object("idp-documents", obj.object_name)
+    except Exception as e:
+        print(f"Error limpiando MinIO para {task_id}: {e}")
+
+    # 2. Eliminar logs relacionados
+    await db.execute(
+        text("DELETE FROM idp_smart.process_logs WHERE task_id = :task_id"),
+        {"task_id": task_id}
+    )
+
+    # 3. Eliminar registro principal
+    query = text("DELETE FROM idp_smart.document_extractions WHERE task_id = :task_id")
+    result = await db.execute(query, {"task_id": task_id})
+    await db.commit()
+    
+    if result.rowcount == 0:
+        return {"error": "Tarea no encontrada."}
+        
+    return {"status": "Deleted", "task_id": task_id, "cleanup": "MinIO and Logs processed"}
+
+
 @app.get("/api/v1/progress/{task_id}", tags=["Monitoreo"])
 async def get_progress(task_id: str, db: AsyncSession = Depends(get_db)):
     """
@@ -193,7 +296,7 @@ async def get_progress(task_id: str, db: AsyncSession = Depends(get_db)):
     """
     query = text("""
         SELECT task_id, status, stage_current, act_type, form_code,
-               created_at, updated_at
+               created_at, updated_at, started_at, total_duration_s
         FROM idp_smart.document_extractions
         WHERE task_id = :task_id
     """)
@@ -206,23 +309,27 @@ async def get_progress(task_id: str, db: AsyncSession = Depends(get_db)):
     row_dict = dict(row._mapping)
     status = row_dict["status"]
     stage  = row_dict.get("stage_current") or status
+    started_at = row_dict.get("started_at")
+    total_duration = row_dict.get("total_duration_s")
 
     # Calcular porcentaje basado en la etapa actual
     pct = _STAGE_ORDER.get(stage, _STAGE_ORDER.get(status, 0))
 
-    # Calcular tiempo transcurrido
+    # Calcular tiempo transcurrido (SOLO si ya inició en el worker)
     from datetime import datetime, timezone
-    created = row_dict.get("created_at")
     elapsed_s = 0
-    if created:
-        now = datetime.now(timezone.utc)
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        elapsed_s = int((now - created).total_seconds())
+    if started_at:
+        if total_duration:
+            elapsed_s = int(total_duration)
+        else:
+            now = datetime.now(timezone.utc)
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
+            elapsed_s = int((now - started_at).total_seconds())
 
-    # Estimación de tiempo restante basada en % y tiempo transcurrido
+    # Estimación de tiempo restante basada en % y tiempo transcurrido desde el inicio real
     estimated_remaining_s = None
-    if 0 < pct < 100 and elapsed_s > 0:
+    if 0 < pct < 100 and elapsed_s > 0 and not total_duration:
         estimated_remaining_s = int((elapsed_s / pct) * (100 - pct))
 
     finished = status in ("COMPLETED", "COMPLETADO", "ERROR")
@@ -235,14 +342,28 @@ async def get_progress(task_id: str, db: AsyncSession = Depends(get_db)):
         "progress_pct":          pct,
         "elapsed_seconds":       elapsed_s,
         "estimated_remaining_s": estimated_remaining_s,
+        "total_duration_s":      total_duration,
+        "is_waiting":            started_at is None and not finished,
         "finished":              finished,
-        # El sistema es asíncrono — siempre se pueden enviar más documentos
         "can_submit_more":       True,
         "act_type":              row_dict.get("act_type"),
         "form_code":             row_dict.get("form_code"),
     }
 
 
+
+
+@app.get("/api/v1/full/{task_id}", tags=["Procesamiento"])
+async def get_full_json(task_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Retorna el JSON completo (esquema Java poblado) de una tarea.
+    """
+    query = text("SELECT extracted_data FROM idp_smart.document_extractions WHERE task_id = :task_id")
+    result = await db.execute(query, {"task_id": task_id})
+    row = result.fetchone()
+    if not row or not row[0]:
+        return {"error": "JSON completo no encontrado para esta tarea."}
+    return row[0]
 
 
 @app.get("/api/v1/simplified/{task_id}", tags=["Procesamiento"])
