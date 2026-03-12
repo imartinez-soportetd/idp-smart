@@ -56,7 +56,7 @@ services:
   worker:
     build: .
     container_name: idp_worker
-    command: celery -A worker.celery_app worker --loglevel=info -c 4
+    command: celery -A worker.celery_app worker --loglevel=info -c 1
     volumes:
       - ./app:/app
     env_file:

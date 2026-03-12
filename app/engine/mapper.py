@@ -73,3 +73,24 @@ def map_results_to_json(json_schema: dict, extracted_data: dict) -> dict:
                 
     _recurse_and_inject(json_schema)
     return json_schema
+
+def extract_fields_from_schema(schema: dict) -> list:
+    """Extrae todos los campos (uuid, label, type) de forma plana para pasárselos al LLM."""
+    fields = []
+    def _collect(node):
+        if isinstance(node, dict):
+            # Si tiene UUID y Label, es algo extraíble (campo o contenedor)
+            if node.get("uuid") and node.get("label"):
+                fields.append({
+                    "uuid": node["uuid"],
+                    "label": node["label"],
+                    "type": node.get("type", "container"),
+                    "is_repetitive": node.get("repetitiva", False)
+                })
+            for v in node.values():
+                _collect(v)
+        elif isinstance(node, list):
+            for item in node:
+                _collect(item)
+    _collect(schema)
+    return fields
