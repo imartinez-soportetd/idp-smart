@@ -19,10 +19,20 @@ class Settings(BaseSettings):
     minio_secure: bool = False
 
     # LLM Settings
-    llm_provider: str = "google" # "google" o "ollama"
+    llm_provider: str = "localai"  # "google", "ollama", o "localai"
     google_api_key: str = ""
+    
+    # Ollama Configuration (Legacy/Alternative)
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen2.5:7b" 
+    ollama_model: str = "qwen2.5:7b"
+    
+    # LocalAI Configuration (OpenAI Compatible API)
+    localai_base_url: str = "http://localhost:8080/v1"
+    localai_model: str = "granite-vision"
+    localai_temperature: float = 0.1  # Baja para extracciones precisas
+    localai_context_size: int = 8192  # Mayor para documentos grandes
+    localai_max_tokens: int = 2048
+    localai_timeout: int = 300  # 5 minutos 
     
     @property
     def database_url(self) -> str:

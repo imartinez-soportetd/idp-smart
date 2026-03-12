@@ -3,17 +3,29 @@ import re
 import json
 from core.config import settings
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 from langchain.prompts import PromptTemplate
 
 def get_llm():
     """
     Instancia el LLM configurado en Settings.
-    Soporta Google (Gemini) y Ollama (Local).
+    Soporta Google (Gemini), Ollama (Legacy), y LocalAI (OpenAI Compatible).
     """
     try:
-        if settings.llm_provider == "ollama":
-            print(f"Conectando a LLM Local (Ollama) en {settings.ollama_base_url} con modelo {settings.ollama_model}...")
+        if settings.llm_provider == "localai":
+            print(f"🚀 Conectando a LocalAI en {settings.localai_base_url} con modelo {settings.localai_model}...")
+            return ChatOpenAI(
+                base_url=settings.localai_base_url,
+                api_key="not-needed",  # LocalAI no requiere API key por defecto
+                model=settings.localai_model,
+                temperature=settings.localai_temperature,
+                max_tokens=settings.localai_max_tokens,
+                timeout=settings.localai_timeout,
+                verbose=True
+            )
+        elif settings.llm_provider == "ollama":
+            print(f"🔧 Conectando a LLM Local (Ollama) en {settings.ollama_base_url} con modelo {settings.ollama_model}...")
             return ChatOllama(
                 base_url=settings.ollama_base_url,
                 model=settings.ollama_model,
@@ -30,7 +42,7 @@ def get_llm():
                 temperature=0
             )
     except Exception as e:
-        print(f"Error cargando el LLM ({settings.llm_provider}): {e}")
+        print(f"❌ Error cargando el LLM ({settings.llm_provider}): {e}")
         return None
 
 def extract_form_data(markdown_text: str, json_form_schema: dict) -> dict:

@@ -1,0 +1,216 @@
+# ============================================
+# LocalAI Docker Compose Override Examples
+#
+# Selecciona el escenario que corresponde a tu hardware
+# y renómbralo a docker-compose.override.yml
+#
+# version: '3.8'
+# ============================================
+
+# ============================================
+# ESCENARIO 1: GPU NVIDIA CUDA (Recomendado)
+# Para: RTX 3060+, RTX 4080+, RTX 4090, etc.
+# ============================================
+
+# version: '3.8'
+# services:
+#   localai:
+#     image: localai/localai:latest-aio-cuda-12
+#     container_name: idp_localai
+#     ports:
+#       - "8080:8080"
+#     environment:
+#       - DEBUG=1
+#       - THREADS=6
+#       - CONTEXT_SIZE=8192
+#       - MODELS_PATH=/build/models
+#       - PRELOAD_MODELS=[{"url":"localai-models:granite-2b-vision-q4cm.gguf","name":"granite-vision"}]
+#       # GPU Configuration
+#       - CUDA_VISIBLE_DEVICES=0    # GPU ID (0, 1, 2, etc.)
+#       - GPU_LAYERS=50             # Layers en GPU (aumentar según VRAM)
+#       - MAIN_GPU=0
+#     volumes:
+#       - ./localai/models:/build/models
+#       - ./localai/config:/etc/localai/config
+#       - localai_cache:/root/.cache
+#     restart: always
+#     # NVIDIA GPU Runtime
+#     deploy:
+#       resources:
+#         reservations:
+#           devices:
+#             - driver: nvidia
+#               count: 1
+#               capabilities: [gpu]
+#     extra_hosts:
+#       - "host.docker.internal:host-gateway"
+
+# ============================================
+# ESCENARIO 2: Intel CPU + OpenVINO
+# Para: Intel Xeon, i7-12th+, con AVX-512
+# ============================================
+
+# version: '3.8'
+# services:
+#   localai:
+#     image: localai/localai:latest-aio-cpu-avx2
+#     container_name: idp_localai
+#     ports:
+#       - "8080:8080"
+#     environment:
+#       - DEBUG=1
+#       - THREADS=8          # Aumentar si más cores
+#       - CONTEXT_SIZE=8192
+#       - MODELS_PATH=/build/models
+#       - PRELOAD_MODELS=[{"url":"localai-models:granite-2b-vision-q4cm.gguf","name":"granite-vision"}]
+#       # OpenVINO Configuration
+#       - INTEL_OPENVINO_ENABLED=1
+#       - OPENVINO_DEVICE=CPU
+#       - OPENVINO_NUM_INFER_REQUESTS=4
+#       - OPENVINO_CACHE=/tmp/openvino_cache
+#       - CUDA_VISIBLE_DEVICES=-1  # Deshabilitar CUDA
+#     volumes:
+#       - ./localai/models:/build/models
+#       - ./localai/config:/etc/localai/config
+#       - localai_cache:/root/.cache
+#     restart: always
+#     extra_hosts:
+#       - "host.docker.internal:host-gateway"
+
+# ============================================
+# ESCENARIO 3: CPU Genérico (AVX-2)
+# Para: Desarrollo local, sistemas legacy
+# ============================================
+
+# version: '3.8'
+# services:
+#   localai:
+#     image: localai/localai:latest-aio-cpu-avx2
+#     container_name: idp_localai
+#     ports:
+#       - "8080:8080"
+#     environment:
+#       - DEBUG=1
+#       - THREADS=4          # Conservador para menor consumo
+#       - CONTEXT_SIZE=4096  # Reducido para menor RAM
+#       - MODELS_PATH=/build/models
+#       - PRELOAD_MODELS=[{"url":"localai-models:granite-2b-vision-q4cm.gguf","name":"granite-vision"}]
+#       - CUDA_VISIBLE_DEVICES=-1  # Deshabilitar CUDA
+#       - F16=false          # Usar F32 para mayor compatibilidad
+#     volumes:
+#       - ./localai/models:/build/models
+#       - ./localai/config:/etc/localai/config
+#       - localai_cache:/root/.cache
+#     restart: always
+#     extra_hosts:
+#       - "host.docker.internal:host-gateway"
+
+# ============================================
+# ESCENARIO 4: Multi-GPU Distribuido
+# Para: Procesamiento de 100+ formularios en paralelo
+#       Requiere múltiples GPUs (2x RTX 4090, etc.)
+# ============================================
+
+# version: '3.8'
+# services:
+#   localai:
+#     image: localai/localai:latest-aio-cuda-12
+#     container_name: idp_localai
+#     ports:
+#       - "8080:8080"
+#     environment:
+#       - DEBUG=1
+#       - THREADS=16        # Para O.S. distribuido
+#       - CONTEXT_SIZE=8192
+#       - MODELS_PATH=/build/models
+#       - PRELOAD_MODELS=[{"url":"localai-models:granite-2b-vision-q4cm.gguf","name":"granite-vision"}]
+#       # Multi-GPU
+#       - CUDA_VISIBLE_DEVICES=0,1      # GPU 0 y 1
+#       - GPU_LAYERS=50
+#       - SCHED_PREFER_SIMD=1           # Optimización SIMD
+#       - LLAMACPP_BATCH=1024           # Batch size grande
+#     volumes:
+#       - ./localai/models:/build/models
+#       - ./localai/config:/etc/localai/config
+#       - localai_cache:/root/.cache
+#     restart: always
+#     deploy:
+#       resources:
+#         reservations:
+#           devices:
+#             - driver: nvidia
+#               device_ids: ['0', '1']  # IDs de GPUs
+#               count: all
+#               capabilities: [gpu]
+#     extra_hosts:
+#       - "host.docker.internal:host-gateway"
+
+# ============================================
+# ESCENARIO 5: Servidor de Producción
+# Configuración balanceada segura
+# ============================================
+
+# version: '3.8'
+# services:
+#   localai:
+#     image: localai/localai:latest-aio-cuda-12
+#     container_name: idp_localai
+#     ports:
+#       - "8080:8080"
+#     environment:
+#       - DEBUG=0                  # Deshabilitar debug en prod
+#       - THREADS=8
+#       - CONTEXT_SIZE=8192
+#       - MODELS_PATH=/build/models
+#       - PRELOAD_MODELS=[{"url":"localai-models:granite-2b-vision-q4cm.gguf","name":"granite-vision"}]
+#       - CUDA_VISIBLE_DEVICES=0
+#       - GPU_LAYERS=40            # Conservative
+#       - LOG_LEVEL=WARN           # Verbose limitado
+#     volumes:
+#       - ./localai/models:/build/models
+#       - ./localai/config:/etc/localai/config
+#       - localai_cache:/root/.cache
+#     restart: unless-stopped
+#     healthcheck:
+#       test: ["CMD", "curl", "-f", "http://localhost:8080/v1/models"]
+#       interval: 30s
+#       timeout: 10s
+#       retries: 3
+#       start_period: 40s
+#     deploy:
+#       resources:
+#         limits:
+#           cpus: '8'
+#           memory: 32G
+#         reservations:
+#           cpus: '6'
+#           memory: 24G
+#           devices:
+#             - driver: nvidia
+#               count: 1
+#               capabilities: [gpu]
+#     extra_hosts:
+#       - "host.docker.internal:host-gateway"
+#     networks:
+#       - default
+#     # Log rotation
+#     logging:
+#       driver: "json-file"
+#       options:
+#         max-size: "10m"
+#         max-file: "3"
+
+# ============================================
+# COMPARACIÓN RÁPIDA
+# ============================================
+# 
+# | Escenario     | Tokens/sec | Latencia 1er | RAM   | Costo |
+# |---------------|-----------|------------|-------|-------|
+# | CPU AVX-2     | 15-20     | 800ms      | 6GB   | Budget|
+# | OpenVINO      | 25-35     | 400ms      | 5GB   | Bajo  |
+# | GPU RTX 3090  | 60-80     | 150ms      | 8GB   | Medio |
+# | GPU RTX 4090  | 100+      | 100ms      | 12GB  | Alto  |
+# | Multi-GPU     | 150+      | 80ms       | 24GB+ | Prod  |
+#
+# ============================================
+

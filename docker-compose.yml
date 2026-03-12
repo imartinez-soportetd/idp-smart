@@ -68,6 +68,25 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  localai:
+    image: localai/localai:latest-aio-cuda-12
+    container_name: idp_localai
+    ports:
+      - "8080:8080"
+    environment:
+      - DEBUG=1
+      - THREADS=4
+      - CONTEXT_SIZE=8192
+      - MODELS_PATH=/build/models
+      - PRELOAD_MODELS=[{"url":"localai-models:granite-2b-vision-q4cm.gguf","name":"granite-vision"}]
+    volumes:
+      - ./localai/models:/build/models
+      - ./localai/config:/etc/localai/config
+      - localai_cache:/root/.cache
+    restart: always
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
   frontend:
     image: node:lts
     container_name: idp_frontend
@@ -83,4 +102,5 @@ services:
 volumes:
   minio_data:
   postgres_data:
+  localai_cache:
 

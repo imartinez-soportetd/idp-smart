@@ -1,0 +1,75 @@
+name: granite-vision
+description: "IBM Granite Vision optimizado para extracción de texto estructurado en documentos legales (Actas y Escrituras mexicanas)"
+model: granite-2b-vision-q4cm.gguf
+backend: llama-cpp
+
+# === PARÁMETROS DE CONTEXTO Y TOKENIZACIÓN ===
+context_size: 8192
+threads: 4
+f16: false
+
+# === PARÁMETROS DE GENERACIÓN ===
+parameters:
+  temperature: 0.1  # Baja temperatura para evitar alucinaciones en extracción de datos legales
+  top_p: 0.95
+  top_k: 40
+  repeat_penalty: 1.1
+  repeat_last_n: 64
+  mirostat: 1  # Habilita Mirostat para mejor control de perplexidad
+  mirostat_tau: 5.0
+  mirostat_eta: 0.1
+  
+# === CONFIGURACIÓN DE CACHÉ Y OPTIMIZACIÓN ===
+cache: true
+cache_size: 2048
+quantization: q4_k_m
+
+# === BACKEND ESPECÍFICO (ONNX/OpenVINO) ===
+backend_options:
+  type: "llama.cpp"
+  # Para OpenVINO (CPU optimizado):
+  # Descomenta si tienes Intel CPU con AVX-512
+  # openvino_device: "CPU"
+  # openvino_cache: "/tmp/openvino_cache"
+  
+  # Para NVIDIA CUDA (si GPU detectada):
+  # gpu_layers: 50  # Aumenta según VRAM disponible (11GB+ = 50, 8GB = 30)
+  # main_gpu: 0
+
+# === TOKENS ESPECIALES ===
+special_tokens:
+  bos_token: "[INST]"
+  eos_token: "[/INST]"
+  
+# === CONFIGURACIÓN DE PROMPT ===
+prompt_template: |
+  [INST] <<SYS>>
+  Eres un analista experto en documentos legales mexicanos (Actas y Escrituras). 
+  Tu tarea es extraer información estructurada en formato JSON con máxima precisión.
+  Evita alucinaciones y mantén fidelidad a los datos del documento.
+  <</SYS>>
+  
+  Documento:
+  {document}
+  
+  Esquema de extracción:
+  {schema}
+  
+  Respuesta (JSON válido únicamente): [/INST]
+
+# === CONFIGURACIÓN DE API ===
+api:
+  openai_compatible: true
+  keep_alive: 3600  # Mantener modelo cargado 1 hora
+
+# === OPTIMIZACIÓN DE VELOCIDAD ===
+performance:
+  batch_size: 512
+  ubatch_size: 512
+  flash_attention: true
+  
+# === LÍMITES DE SEGURIDAD ===
+limits:
+  max_tokens: 2048
+  timeout: 300  # 5 minutos máximo por request
+  max_concurrent: 2
