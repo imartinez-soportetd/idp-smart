@@ -7,6 +7,67 @@ from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 from langchain.prompts import PromptTemplate
 
+def create_simplified_json(extracted_data: dict, schema: dict) -> dict:
+    """
+    Transforma uuid → value pairs a label → value pairs humanizados.
+    NUNCA retorna null: siempre retorna un dict válido, aunque sea vacío.
+    
+    Este es SOLO un transformador de presentación, no cambia los datos.
+    """
+    simplified = {}
+    uuid_to_label_map = {}
+    
+    # Fase 1: Construir mapa completo de uuid → label desde el esquema
+    def build_uuid_map(node):
+        """Recorre esquema y mapea uuid → label"""
+        if isinstance(node, dict):
+            uuid_val = node.get("uuid")
+            label_val = node.get("label")
+            if uuid_val and label_val:
+                uuid_to_label_map[uuid_val] = label_val
+            
+            # Continuar en propiedades
+            for v in node.values():
+                build_uuid_map(v)
+        elif isinstance(node, list):
+            for item in node:
+                build_uuid_map(item)
+    
+    build_uuid_map(schema)
+    
+    # Fase 2: Transformar datos extraídos usando el mapa
+    def transform_value(value):
+        """Convierte valor recursivamente: si es dict con uuids, substituye por labels"""
+        if isinstance(value, dict):
+            transformed = {}
+            for k, v in value.items():
+                # Si la clave es un uuid, usa su label
+                label_key = uuid_to_label_map.get(k, k)
+                transformed[label_key] = transform_value(v)
+            return transformed
+        elif isinstance(value, list):
+            # Para arrays, transforma cada elemento
+            return [transform_value(item) for item in value]
+        else:
+            # Valor primitivo
+            return value
+    
+    # Fase 3: Inyectar datos transformados
+    for uuid_key, value in extracted_data.items():
+        label_key = uuid_to_label_map.get(uuid_key, uuid_key)
+        transformed_value = transform_value(value)
+        simplified[label_key] = transformed_value
+    
+    # Fase 4: Garantizar que NUNCA retorna None/null
+    # Si está vacío, retorna estructura mínima válida
+    if not simplified:
+        simplified = {
+            "Estado": "Sin datos extraídos del documento",
+            "Nota": "Verifica que el documento contenga la información esperada"
+        }
+    
+    return simplified
+
 def get_llm():
     """
     Instancia el LLM configurado en Settings.
@@ -46,34 +107,81 @@ def get_llm():
         return None
 
 def extract_form_data(markdown_text: str, json_form_schema: dict) -> dict:
-    template = """
-    Eres un analista experto en documentos legales mexicanos (Actas y Escrituras).
-    Se te proporciona el documento extraído jerárquicamente en formato Markdown.
-    También tienes el esquema del formulario dinámico JSON con los campos requeridos.
-    
-    TU TAREA PRINCIPAL:
-    1. ANALIZAR PROFUNDAMENTE: El esquema JSON puede tener múltiples niveles de anidación (contenedores dentro de contenedores). Debes recorrer TODA la estructura, no solo el primer nivel.
-    2. EXTRAER VALORES: Busca en el documento la información que corresponda a cada `uuid` del esquema y colócalo en el campo `value`.
-    3. MANEJO DE MATRICES/LISTAS (CRÍTICO): Si encuentras una sección que es "Repetible" (ej: 'Propietarios', 'Antecedentes', 'Colindancias') y el documento menciona VARIAS de estas entidades:
-       - El valor asociado al UUID del contenedor padre debe ser una LISTA de objetos.
-       - Cada objeto en esa lista debe tener la estructura interna definida en el esquema (sus propios UUIDs) con los datos de esa instancia específica.
-       - NO te limites a la primera coincidencia; extrae todas las que aparezcan en el documento.
-    
-    REGLAS DE FORMATO:
-    - Retorna ÚNICAMENTE un JSON válido.
-    - Las llaves deben ser los UUIDs.
-    - Si un UUID corresponde a un contenedor con múltiples instancias, el valor es una lista `[]`.
-    - Si un campo no existe en el documento, usa `null` o `""`.
-    - Mantén la fidelidad de los datos (nombres exactos, fechas, montos).
-    
-    DOCUMENTO MARKDOWN:
-    {document_md}
-    
-    ESQUEMA A EXTRAER (JSON):
-    {form_schema}
-    
-    Respuesta (Solo JSON válido):
     """
+    Extrae datos legales de alta precisión mapeando TODOS los campos del esquema al documento.
+    
+    Retorna: dict con estructura uuid → value
+    Cada UUID del esquema recibe su valor correspondiente del documento.
+    """
+    template = """
+EXTRACCIÓN DE DATOS LEGALES CON MÁXIMA PRECISIÓN
+
+Eres un experto en documentos legales mexicanos. Tu tarea es MAPEAR EXACTAMENTE cada UUID del esquema 
+al valor correspondiente en el documento. NO inventes datos, NO simplifiques, NO agregues información.
+
+INSTRUCCIONES CRÍTICAS:
+
+1️⃣ LECTURA COMPLETA:
+   - Lee TODA la información del documento
+   - Si hay 3 solicitantes, TODOS deben extraerse (no solo el primero)
+   - Si hay 2 titulares con porcentajes (20%, 80%), ambos deben aparecer
+   - Busca TODOS los "Derechos de inscripción" (no solo el primero)
+
+2️⃣ ESTRUCTURA DE RETORNO - UUID → VALUE:
+   El JSON retornado tiene esta estructura EXACTA:
+   {{
+     "uuid-campo-simple": "valor_exacto",
+     "uuid-campo-fecha": "YYYY-MM-DD",
+     "uuid-campo-numero": 12345,
+     "uuid-contenedor-repetible": [
+       {{"uuid-sub1": "valor1", "uuid-sub2": "valor2"}},
+       {{"uuid-sub1": "valor1b", "uuid-sub2": "valor2b"}},
+       {{"uuid-sub1": "valor1c", "uuid-sub2": "valor2c"}}
+     ]
+   }}
+
+3️⃣ MANEJO DE REPETIBLES (CRÍTICO):
+   Si el esquema tiene un contenedor que aparece múltiples veces en el documento:
+   - ¿3 solicitantes? → Retorna array con 3 objetos, cada uno con sus uuids
+   - ¿2 titulares? → Retorna array con 2 objetos
+   - ¿3 recibos de derechos? → Retorna array con 3 objetos
+   
+   SIEMPRE que haya múltiples instancias, retorna un ARRAY, no un objeto único.
+
+4️⃣ VALORES EXACTOS:
+   - Nombres: EXACTOS como aparecen (respeta MAYÚSCULAS/minúsculas)
+   - Fechas: Convierte a YYYY-MM-DD (ej: "1995-09-28")
+   - Montos: Solo número sin $ ni comas (ej: 41540)
+   - Porcentajes: Solo número (ej: 20, 40, 80 - SIN símbolo %)
+   - Estados/Municipios: Exacto como en documento
+   - Selecciones (SI/NO, estado civil): Exacto del documento
+
+5️⃣ VALIDACIÓN LÓGICA:
+   - Si hay titular 1 con 20%, busca dónde están los otros 80%
+   - Si hay 3 solicitantes, debe haber registro de todos (revisión cruzada en documento)
+   - Suma de porcentajes: 3 titulares → sus % deben sumar 100%
+   - Fechas coherentes: inscripción ≥ fecha escritura
+
+6️⃣ MANEJO DE AUSENCIAS:
+   - Si un campo NO existe en el documento → usa null (NO strings vacíos)
+   - Si faltan datos → null, no inventes
+   - Si está parcialmente legible → usa lo legible, marca lo dudoso con "?"
+
+ESQUEMA (estructura y UUIDs):
+{form_schema}
+
+DOCUMENTO:
+{document_md}
+
+⚠️ RESTRICCIONES FINALES:
+- Retorna SOLO JSON válido
+- Sin explicaciones, sin markdown, sin backticks
+- Respeta EXACTAMENTE la estructura uuid → value del esquema
+- Si un uuid no existe en el documento → omítelo O usa null
+- Arrays SIEMPRE para campos repetibles (incluso si hay solo 1 instancia)
+
+Respuesta (Solo JSON):
+"""
     
     llm = get_llm()
     if not llm:
@@ -94,30 +202,41 @@ def extract_form_data(markdown_text: str, json_form_schema: dict) -> dict:
     clean_text = text_response.replace('```json', '').replace('```', '').strip()
     
     try:
-        return json.loads(clean_text)
+        extracted_json = json.loads(clean_text)
+        return extracted_json
     except Exception as e1:
-        print(f"Intento 1 fallido de parseo LLM ({e1}). Buscando reparar el JSON cortado...")
+        print(f"❌ Intento 1 fallido de parseo LLM ({e1}). Intentando reparar...")
         
         # Si el modelo cortó a la mitad, forzamos cerrar las llaves y comillas.
-        # Buscamos la llave inicial
         start_idx = text_response.find('{')
         if start_idx != -1:
             json_str = text_response[start_idx:]
-            # Limpiamos el último caracter si se cortó a la mitad de una línea o comilla
-            json_str = re.sub(r'\"[^\"]*$', '"', json_str) # cierra comillas abiertas al final
-            json_str = re.sub(r',\s*$', '', json_str)      # quita coma colgante al final
             
-            # Forzamos cierre de llaves
-            if not json_str.strip().endswith('}'):
-                json_str += '\n}'
+            # Estrategia de reparación: contar llaves y arrays, cerrar lo que falta
+            open_braces = json_str.count('{') - json_str.count('}')
+            open_brackets = json_str.count('[') - json_str.count(']')
+            open_quotes = len(re.findall(r'(?<!\\)"', json_str)) % 2  # detecta comillas desemparejadas
+            
+            # Limpiar caracteres cortados
+            json_str = re.sub(r'["}\]]\s*$', '', json_str)  # quita caracteres incompletos al final
+            
+            # Cerrar lo que falta
+            if open_quotes:
+                json_str += '"'
+            if open_brackets > 0:
+                json_str += ']' * open_brackets
+            if open_braces > 0:
+                json_str += '}' * open_braces
                 
             try:
-                return json.loads(json_str)
+                extracted_json = json.loads(json_str)
+                print(f"✅ JSON reparado exitosamente")
+                return extracted_json
             except Exception as e2:
-                print(f"Intento 2 de reparación fallido: {e2}")
-                print(f"⚠️ RAW TEXT DEL MODELO (Falló):\n------\n{text_response}\n------")
+                print(f"❌ Intento 2 de reparación fallido: {e2}")
+                print(f"⚠️ RAW TEXT DEL MODELO:\n------\n{text_response[:500]}\n------")
                 return {}
         else:
-            print(f"No se encontró un bloque JSON en la respuesta.")
-            print(f"⚠️ RAW TEXT DEL MODELO (Falló):\n------\n{text_response}\n------")
+            print(f"❌ No se encontró un bloque JSON en la respuesta.")
+            print(f"⚠️ RAW TEXT DEL MODELO:\n------\n{text_response[:500]}\n------")
             return {}
