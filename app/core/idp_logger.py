@@ -107,6 +107,10 @@ def build_simplified_json(full_json: dict) -> dict:
     Recorre el JSON completo del sistema Java y extrae un diccionario
     plano con el formato { "label": "value" } para cada control visible.
 
+    Garantiza que los VALUES sean siempre escalares o listas de dicts con
+    claves de etiqueta (no UUIDs). Nunca debería aparecer un UUID como clave
+    en el JSON simplificado final.
+
     Ejemplo de salida:
         {
           "Folio real electrónico": "12345678901234567890",
@@ -116,28 +120,84 @@ def build_simplified_json(full_json: dict) -> dict:
     """
     simplified: dict[str, Any] = {}
 
+    # ── Paso 1: construir índice uuid → label para poder resolver cualquier
+    #            diccionario de UUIDs que el LLM haya devuelto mezclado ──────
+    uuid_to_label: dict[str, str] = {}
+
+    def _collect_uuid_labels(node):
+        if isinstance(node, dict):
+            uid = node.get("uuid")
+            lbl = node.get("label")
+            if uid and lbl:
+                uuid_to_label[uid] = lbl.strip()
+            for v in node.values():
+                _collect_uuid_labels(v)
+        elif isinstance(node, list):
+            for item in node:
+                _collect_uuid_labels(item)
+
+    _collect_uuid_labels(full_json)
+
+    # ── Paso 2: función auxiliar para convertir un valor a su forma legible ──
+    def _resolve_value(val):
+        """
+        Si val es un dict de UUIDs (como devuelve el LLM a veces), lo convierte
+        a un dict con etiquetas.  Si es una lista de tales dicts, la procesa
+        elemento a elemento.  Los escalares se devuelven tal cual.
+        """
+        if isinstance(val, dict):
+            resolved = {}
+            for k, v in val.items():
+                label = uuid_to_label.get(k, k)   # usa etiqueta si la hay
+                if isinstance(v, (dict, list)):
+                    resolved[label] = _resolve_value(v)
+                elif v not in (None, "", []):
+                    resolved[label] = v
+            return resolved if resolved else None
+        elif isinstance(val, list):
+            result = []
+            for item in val:
+                r = _resolve_value(item)
+                if r:
+                    result.append(r)
+            return result if result else None
+        else:
+            return val
+
+    # ── Paso 3: recorrer el JSON completo y extraer label→value ──────────────
     def _recurse(node, prefix=""):
         if isinstance(node, dict):
-            # 1. Nodo de control con label y value
+            # Nodo de control con label y value explícito
             if "label" in node and "value" in node:
                 label = node.get("label", "").strip()
                 value = node.get("value")
-                if label and value is not None and value != "":
-                    # Usar prefijo si estamos dentro de una instancia de matriz
+
+                # Ignorar valores vacíos o None simples
+                if label and value is not None and value != "" and value != {}:
                     display_label = f"{label} {prefix}".strip()
-                    simplified[display_label] = value
-            
-            # 2. Soporte para MATRICES (instancias clonadas)
+
+                    if isinstance(value, dict):
+                        # El LLM puso un dict de UUIDs como value — resolvemos etiquetas
+                        resolved = _resolve_value(value)
+                        if resolved:
+                            simplified[display_label] = resolved
+                    elif isinstance(value, list):
+                        resolved = _resolve_value(value)
+                        if resolved:
+                            simplified[display_label] = resolved
+                    else:
+                        simplified[display_label] = value
+
+            # Soporte para MATRICES (instancias clonadas por el mapper)
             if "instances" in node and isinstance(node["instances"], list):
                 for i, instance in enumerate(node["instances"]):
-                    # Añadimos un sub-prefijo numerado para distinguir propietarios, colindancias, etc.
                     _recurse(instance, prefix=f"({i+1})")
-            
-            # 3. Seguir recorriendo todos los valores anidados estándar
+
+            # Seguir recorriendo valores anidados estándar
             for k, val in node.items():
-                if k != "instances": # evitamos doble recorrido
+                if k not in ("instances", "value"):
                     _recurse(val, prefix=prefix)
-                    
+
         elif isinstance(node, list):
             for item in node:
                 _recurse(item, prefix=prefix)
